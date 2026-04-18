@@ -1,0 +1,489 @@
+<script>
+(function() {
+  var APP_BASE_URL = '{{ block.settings.app_base_url | strip | escape }}';
+  var DEFAULT_DISCOUNT_CODE = '{{ block.settings.discount_code | default: "AMAZON5" | escape }}';
+  var DELAY_MS = 5000;
+  var SIGNUP_QUERY_KEY = "amz_discount";
+  var USER_QUERY_KEY = "amz_external_user_id";
+
+  var style = document.createElement("style");
+  style.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    .amz-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0);
+      z-index: 2147483646;
+      transition: background 0.4s ease;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+    .amz-overlay.is-visible {
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      pointer-events: auto;
+    }
+
+    .amz-popup {
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+      position: relative;
+      width: 420px;
+      max-width: calc(100vw - 40px);
+      background: linear-gradient(145deg, #1a1f2e 0%, #0f1419 50%, #1a1f2e 100%);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow:
+        0 25px 80px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 153, 0, 0.15),
+        0 0 60px rgba(255, 153, 0, 0.08);
+      transform: scale(0.8) translateY(30px);
+      opacity: 0;
+      transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .amz-overlay.is-visible .amz-popup {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
+
+    .amz-popup::before {
+      content: "";
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, transparent, #FF9900, #FEBD69, #FF9900, transparent);
+      animation: amz-shimmer 3s ease-in-out infinite;
+    }
+    @keyframes amz-shimmer {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
+
+    .amz-popup__close {
+      position: absolute; top: 14px; right: 14px;
+      width: 32px; height: 32px; border-radius: 50%;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.5);
+      font-size: 18px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s ease;
+      z-index: 2; padding: 0;
+    }
+    .amz-popup__close:hover {
+      background: rgba(255,255,255,0.12);
+      color: #fff;
+      transform: rotate(90deg);
+    }
+
+    .amz-popup__body {
+      padding: 40px 32px 32px;
+      text-align: center;
+      position: relative;
+    }
+
+    .amz-popup__particles {
+      position: absolute; inset: 0; pointer-events: none; overflow: hidden;
+    }
+    .amz-popup__particle {
+      position: absolute; width: 4px; height: 4px;
+      background: #FEBD69; border-radius: 50%; opacity: 0;
+      animation: amz-float 4s ease-in-out infinite;
+    }
+    .amz-popup__particle:nth-child(1) { top: 15%; left: 10%; animation-delay: 0s; }
+    .amz-popup__particle:nth-child(2) { top: 60%; left: 85%; animation-delay: 1s; }
+    .amz-popup__particle:nth-child(3) { top: 80%; left: 25%; animation-delay: 2s; }
+    .amz-popup__particle:nth-child(4) { top: 25%; left: 75%; animation-delay: 3s; }
+    @keyframes amz-float {
+      0%, 100% { opacity: 0; transform: scale(0) translateY(0); }
+      50% { opacity: 0.6; transform: scale(1) translateY(-10px); }
+    }
+
+    .amz-popup__icon {
+      width: 64px; height: 64px; margin: 0 auto 20px;
+      background: linear-gradient(135deg, #FF9900, #FEBD69);
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 8px 24px rgba(255, 153, 0, 0.3);
+      animation: amz-icon-in 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both;
+    }
+    @keyframes amz-icon-in {
+      0% { transform: scale(0) rotate(-15deg); }
+      100% { transform: scale(1) rotate(0deg); }
+    }
+    .amz-popup__icon svg { width: 34px; height: 34px; fill: #232F3E; }
+
+    .amz-popup__badge {
+      display: inline-flex; align-items: baseline; gap: 4px;
+      margin-bottom: 12px;
+      animation: amz-fade-up 0.5s ease-out 0.4s both;
+    }
+    .amz-popup__badge-num {
+      font-size: 52px; font-weight: 800; line-height: 1;
+      background: linear-gradient(135deg, #00D68F, #00A661);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .amz-popup__badge-pct {
+      font-size: 28px; font-weight: 800;
+      background: linear-gradient(135deg, #00D68F, #00A661);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .amz-popup__badge-off {
+      font-size: 16px; font-weight: 700; color: rgba(255,255,255,0.5);
+      text-transform: uppercase; letter-spacing: 0.1em; margin-left: 4px;
+    }
+
+    @keyframes amz-fade-up {
+      0% { opacity: 0; transform: translateY(12px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    .amz-popup__title {
+      margin: 0 0 8px; font-size: 22px; font-weight: 800; color: #fff;
+      letter-spacing: -0.02em;
+      animation: amz-fade-up 0.5s ease-out 0.5s both;
+    }
+
+    .amz-popup__desc {
+      margin: 0 0 28px; font-size: 14px; color: rgba(255,255,255,0.5);
+      line-height: 1.6;
+      animation: amz-fade-up 0.5s ease-out 0.6s both;
+    }
+
+    .amz-popup__cta {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: linear-gradient(135deg, #FF9900, #FFB347);
+      color: #232F3E; border: none; border-radius: 12px;
+      padding: 16px 36px;
+      font-family: "Inter", sans-serif;
+      font-size: 16px; font-weight: 700;
+      cursor: pointer; transition: all 0.3s ease;
+      box-shadow: 0 6px 24px rgba(255, 153, 0, 0.35);
+      animation: amz-fade-up 0.5s ease-out 0.7s both;
+      letter-spacing: -0.01em;
+    }
+    .amz-popup__cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 36px rgba(255, 153, 0, 0.5);
+    }
+    .amz-popup__cta:active {
+      transform: translateY(0);
+    }
+    .amz-popup__cta svg { width: 20px; height: 20px; }
+
+    .amz-popup__hint {
+      display: block; margin-top: 14px;
+      font-size: 11px; color: rgba(255,255,255,0.3);
+      animation: amz-fade-up 0.5s ease-out 0.8s both;
+    }
+
+    .amz-toast {
+      position: fixed;
+      bottom: 18px;
+      right: 18px;
+      max-width: min(92vw, 420px);
+      z-index: 2147483647;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 153, 0, 0.3);
+      background: linear-gradient(135deg, rgba(35, 47, 62, 0.97), rgba(18, 28, 40, 0.97));
+      color: #ffffff;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .amz-toast strong {
+      color: #FFB347;
+      font-size: 16px;
+    }
+    .amz-toast--error {
+      border-color: rgba(255, 110, 110, 0.35);
+    }
+  `;
+  document.head.appendChild(style);
+
+  function showToast(html, isError) {
+    var node = document.createElement("div");
+    node.className = "amz-toast" + (isError ? " amz-toast--error" : "");
+    node.innerHTML = html;
+    document.body.appendChild(node);
+    setTimeout(function() {
+      node.remove();
+    }, 9000);
+  }
+
+  function withUrlParam(url, key, value) {
+    var u = new URL(url, window.location.origin);
+    u.searchParams.set(key, value);
+    return u.toString();
+  }
+
+  function normalizedAppBaseUrl() {
+    if (!APP_BASE_URL) return "";
+    var trimmed = String(APP_BASE_URL).trim();
+    if (!trimmed || trimmed === "https://example.com") return "/apps/knot";
+    return trimmed.replace(/\/$/, "");
+  }
+
+  function buildApiUrl(path) {
+    var base = normalizedAppBaseUrl();
+    if (!base) return "";
+    if (base.startsWith("/")) return base + path;
+    return base + path;
+  }
+
+  function removeUrlParams(keys) {
+    var url = new URL(window.location.href);
+    for (var i = 0; i < keys.length; i += 1) {
+      url.searchParams.delete(keys[i]);
+    }
+    window.history.replaceState({}, "", url.toString());
+  }
+
+  function getShopDomain() {
+    if (window.Shopify && window.Shopify.shop) return window.Shopify.shop;
+    return window.location.hostname;
+  }
+
+  function loadKnotSdk() {
+    if (window.KnotapiJS && window.KnotapiJS.default) return Promise.resolve();
+    return new Promise(function(resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "https://unpkg.com/knotapi-js@next";
+      script.async = true;
+      script.onload = function() { resolve(); };
+      script.onerror = function() { reject(new Error("Failed to load Knot SDK")); };
+      document.head.appendChild(script);
+    });
+  }
+
+  async function verifyKnotAccount(externalUserId) {
+    if (!externalUserId) return null;
+    var endpoint = buildApiUrl(
+      "/api/knot/accounts?externalUserId=" + encodeURIComponent(externalUserId) + "&merchantName=Amazon"
+    );
+    if (!endpoint) return null;
+    var response = await fetch(endpoint, { method: "GET" });
+    if (!response.ok) throw new Error("Could not fetch Knot account data");
+    return response.json();
+  }
+
+  async function fetchWebhookDiscountCode(externalUserId) {
+    if (!externalUserId) return null;
+    var endpoint = buildApiUrl("/api/knot/discount?externalUserId=" + encodeURIComponent(externalUserId));
+    if (!endpoint) return null;
+    var response = await fetch(endpoint, { method: "GET" });
+    if (!response.ok) return null;
+    var data = await response.json();
+    return data && data.discountCode ? data.discountCode : null;
+  }
+
+  async function waitForWebhookDiscountCode(externalUserId) {
+    var attempts = 5;
+    var delayMs = 1800;
+    for (var i = 0; i < attempts; i += 1) {
+      var code = await fetchWebhookDiscountCode(externalUserId);
+      if (code) return code;
+      await new Promise(function(resolve) { setTimeout(resolve, delayMs); });
+    }
+    return null;
+  }
+
+  function showSuccessDiscountMessage(discountCode, statusLabel) {
+    var suffix = statusLabel ? "<br><span>Knot status: " + statusLabel + "</span>" : "";
+    showToast(
+      "Amazon signup complete. Your 5% code: <strong>" + discountCode + "</strong>" + suffix,
+      false
+    );
+  }
+
+  var urlParams = new URL(window.location.href).searchParams;
+  var signupFlag = urlParams.get(SIGNUP_QUERY_KEY);
+  var returnExternalUserId = urlParams.get(USER_QUERY_KEY);
+  var savedDiscountCode = localStorage.getItem("amz_discount_code");
+  var savedExternalUserId = localStorage.getItem("amz_external_user_id");
+
+  if (signupFlag === "1") {
+    var userForVerify = returnExternalUserId || savedExternalUserId;
+    if (userForVerify) {
+      Promise.all([
+        waitForWebhookDiscountCode(userForVerify),
+        verifyKnotAccount(userForVerify).catch(function() { return null; }),
+      ]).then(function(results) {
+        var issuedCode = results[0];
+        var data = results[1];
+        var account = Array.isArray(data && data.accounts) ? data.accounts[0] : (data && data.accounts);
+        var status = account && account.connection ? account.connection.status : "linked";
+        var codeToShow = issuedCode || savedDiscountCode || DEFAULT_DISCOUNT_CODE;
+        localStorage.setItem("amz_discount_code", codeToShow);
+        showSuccessDiscountMessage(codeToShow, status || "linked");
+      });
+    } else {
+      var codeToShow = savedDiscountCode || DEFAULT_DISCOUNT_CODE;
+      showSuccessDiscountMessage(codeToShow);
+    }
+
+    removeUrlParams([SIGNUP_QUERY_KEY, USER_QUERY_KEY, "merchant"]);
+  }
+
+  if (sessionStorage.getItem("amz_popup_shown")) return;
+
+  var overlay = document.createElement("div");
+  overlay.className = "amz-overlay";
+  overlay.innerHTML = `
+    <div class="amz-popup">
+      <button class="amz-popup__close" aria-label="Close">&times;</button>
+      <div class="amz-popup__body">
+        <div class="amz-popup__particles">
+          <span class="amz-popup__particle"></span>
+          <span class="amz-popup__particle"></span>
+          <span class="amz-popup__particle"></span>
+          <span class="amz-popup__particle"></span>
+        </div>
+        <div class="amz-popup__icon">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M.045 18.02c.072-.116.187-.124.348-.022 2.344 1.47 4.934 2.204 7.77 2.204 1.89 0 3.673-.33 5.344-.99 1.672-.66 3.078-1.518 4.218-2.57.14-.13.26-.19.36-.19.14 0 .21.09.21.28 0 .12-.07.3-.21.52-.63.97-1.5 1.83-2.61 2.58-1.11.75-2.32 1.31-3.63 1.69-1.31.37-2.64.56-3.99.56-1.67 0-3.26-.3-4.77-.92C1.585 20.51.345 19.65.015 18.35c-.02-.08-.02-.14 0-.17l.03-.16z"/>
+          </svg>
+        </div>
+        <div class="amz-popup__badge">
+          <span class="amz-popup__badge-num">5</span>
+          <span class="amz-popup__badge-pct">%</span>
+          <span class="amz-popup__badge-off">OFF</span>
+        </div>
+        <h2 class="amz-popup__title">Sign Up &amp; Save Instantly</h2>
+        <p class="amz-popup__desc">Connect your Amazon account and get an exclusive<br>5% discount on your entire order.</p>
+        <button class="amz-popup__cta">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M.045 18.02c.072-.116.187-.124.348-.022 2.344 1.47 4.934 2.204 7.77 2.204 1.89 0 3.673-.33 5.344-.99 1.672-.66 3.078-1.518 4.218-2.57.14-.13.26-.19.36-.19.14 0 .21.09.21.28 0 .12-.07.3-.21.52-.63.97-1.5 1.83-2.61 2.58-1.11.75-2.32 1.31-3.63 1.69-1.31.37-2.64.56-3.99.56-1.67 0-3.26-.3-4.77-.92C1.585 20.51.345 19.65.015 18.35c-.02-.08-.02-.14 0-.17l.03-.16z"/>
+          </svg>
+          Sign Up Now
+        </button>
+        <span class="amz-popup__hint">Secure &middot; 1-click &middot; No credit card needed</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  setTimeout(function() {
+    overlay.classList.add("is-visible");
+    sessionStorage.setItem("amz_popup_shown", "1");
+  }, DELAY_MS);
+
+  function closePopup() {
+    overlay.classList.remove("is-visible");
+    setTimeout(function() { overlay.remove(); }, 500);
+  }
+
+  overlay.querySelector(".amz-popup__close").addEventListener("click", closePopup);
+  overlay.addEventListener("click", function(e) {
+    if (e.target === overlay) closePopup();
+  });
+
+  var cta = overlay.querySelector(".amz-popup__cta");
+  cta.addEventListener("click", async function(e) {
+    e.preventDefault();
+
+    try {
+      cta.disabled = true;
+      cta.style.opacity = "0.75";
+      cta.textContent = "Opening Amazon Signup...";
+
+      await loadKnotSdk();
+
+      var cleanUrl = window.location.origin + window.location.pathname + window.location.hash;
+      var returnUrl = withUrlParam(cleanUrl, SIGNUP_QUERY_KEY, "1");
+      var sessionEndpoint = buildApiUrl("/api/knot/session");
+
+      var sessionResponse = await fetch(sessionEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shopDomain: getShopDomain(),
+          returnUrl: returnUrl,
+        }),
+      });
+
+      if (!sessionResponse.ok) {
+        var errorPayload = null;
+        var rawText = "";
+        try {
+          errorPayload = await sessionResponse.json();
+        } catch (_jsonErr) {
+          try {
+            rawText = await sessionResponse.text();
+          } catch (_textErr) {
+            rawText = "";
+          }
+        }
+        var backendMessage = errorPayload && (errorPayload.details || errorPayload.error);
+        if (!backendMessage && rawText) {
+          backendMessage = rawText.slice(0, 200);
+        }
+        throw new Error(backendMessage || ("Unable to create Knot session (HTTP " + sessionResponse.status + ")"));
+      }
+
+      var sessionData = await sessionResponse.json();
+      var KnotapiJS = window.KnotapiJS.default;
+      var knotapi = new KnotapiJS();
+
+      knotapi.open({
+        sessionId: sessionData.sessionId,
+        clientId: sessionData.clientId,
+        environment: sessionData.environment,
+        merchantIds: sessionData.merchantIds,
+        entryPoint: "storefront_amazon_popup",
+        onSuccess: function(details) {
+          var redirectUrl = sessionData.returnUrl || returnUrl;
+          localStorage.setItem("amz_external_user_id", sessionData.externalUserId);
+          window.location.href = withUrlParam(
+            withUrlParam(redirectUrl, USER_QUERY_KEY, sessionData.externalUserId),
+            "merchant",
+            (details && details.merchantName) || "Amazon"
+          );
+        },
+        onError: function(code, message) {
+          cta.disabled = false;
+          cta.style.opacity = "";
+          cta.textContent = "Sign Up Now";
+          showToast("Knot error (" + code + "): " + message, true);
+        },
+        onExit: function() {
+          cta.disabled = false;
+          cta.style.opacity = "";
+          cta.textContent = "Sign Up Now";
+        },
+      });
+    } catch (error) {
+      cta.disabled = false;
+      cta.style.opacity = "";
+      cta.textContent = "Sign Up Now";
+      var message = (error && error.message) ? error.message : "Unknown error";
+      showToast("Unable to launch Amazon signup: " + message, true);
+      console.error("[Amazon Popup] Knot launch failed", error);
+    }
+  });
+})();
+</script>
+
+{% schema %}
+{
+  "name": "Amazon Discount Popup",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "app_base_url",
+      "label": "App Base URL (optional)",
+      "default": "/apps/knot",
+      "info": "Leave as /apps/knot to use Shopify app proxy. Set full URL only if you host custom API routes externally."
+    },
+    {
+      "type": "text",
+      "id": "discount_code",
+      "label": "Discount Code",
+      "default": "AMAZON5"
+    }
+  ]
+}
+{% endschema %}
